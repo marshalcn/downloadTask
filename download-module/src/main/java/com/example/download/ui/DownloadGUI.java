@@ -12,10 +12,16 @@ import java.util.Date;
 import java.util.List;
 import javax.swing.Timer;
 import com.example.download.core.MultiThreadDownloader;
+import com.example.download.core.MultiThreadDownloader.DownloadRange;
 import com.example.download.manager.ConfigManager;
 import com.example.download.manager.TaskManager;
 import com.example.download.model.DownloadTaskInfo;
 import com.example.download.ui.DownloadDetailDialog;
+import java.io.File;
+import java.io.RandomAccessFile;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
+import java.util.Set;
 
 public class DownloadGUI extends JFrame {
     private JButton createTaskButton;
@@ -597,6 +603,55 @@ public class DownloadGUI extends JFrame {
         taskInfo.setSavePath(savePath);
         taskInfo.setThreadCount(threadCount);
         
+        // 在创建任务时就生成所有文件区块的索引并设置初始下载状态为未下载
+        try {
+            // 获取文件大小
+            long fileSize = downloader.getFileSize(url);
+            taskInfo.setFileSize(fileSize);
+            
+            // 创建保存目录和空文件
+            File saveDir = new File(savePath);
+            if (!saveDir.exists()) {
+                saveDir.mkdirs();
+            }
+            
+            // 从URL提取文件名
+            String fileName = downloader.extractFileName(url);
+            taskInfo.setFileName(fileName);
+            String fullSavePath = new File(saveDir, fileName).getAbsolutePath();
+            
+            // 创建空文件并设置大小
+            File downloadFile = new File(fullSavePath);
+            try (RandomAccessFile raf = new RandomAccessFile(fullSavePath, "rw")) {
+                raf.setLength(fileSize);
+            }
+            
+            // 创建临时目录和索引文件
+            String tempDirPath = saveDir.getAbsolutePath() + File.separator + ".temp-" + taskInfo.getId();
+            File tempDir = new File(tempDirPath);
+            if (!tempDir.exists()) {
+                tempDir.mkdirs();
+            }
+            File indexFile = new File(tempDir, "index.txt");
+            
+            // 生成所有文件区块的索引
+            Set<DownloadRange> allRanges = downloader.generateAllRanges(fileSize);
+            
+            // 保存所有区块的索引（包括未下载的）到索引文件
+            downloader.saveAllRanges(indexFile, allRanges);
+            
+            // 将索引文件复制到下载文件目录下，方便检查
+            String downloadFileName = downloadFile.getName();
+            String idxFileName = downloadFileName + ".idx";
+            File idxFileCopy = new File(saveDir, idxFileName);
+            Files.copy(indexFile.toPath(), idxFileCopy.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            
+            JOptionPane.showMessageDialog(this, "下载任务创建成功", "提示", JOptionPane.INFORMATION_MESSAGE);
+        } catch (Exception e) {
+            JOptionPane.showMessageDialog(this, "创建下载任务失败: " + e.getMessage(), "错误", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+        
         // 添加任务到任务管理器
         taskManager.addTask(taskInfo);
         
@@ -610,7 +665,7 @@ public class DownloadGUI extends JFrame {
                 taskManager.updateTask(taskInfo);
                 
                 // 显示开始下载的提示
-                JOptionPane.showMessageDialog(DownloadGUI.this, "开始下载文件！", "提示", JOptionPane.INFORMATION_MESSAGE);
+                // JOptionPane.showMessageDialog(DownloadGUI.this, "开始下载文件！", "提示", JOptionPane.INFORMATION_MESSAGE);
             } catch (Exception e) {
                 // 更新任务状态为失败
                 taskInfo.setStatus(DownloadTaskInfo.TaskStatus.FAILED);

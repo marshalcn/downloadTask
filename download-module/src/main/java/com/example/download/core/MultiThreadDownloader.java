@@ -91,8 +91,10 @@ public class MultiThreadDownloader {
             // 统计实际已下载大小（从文件块索引）
             try {
                 // 构建临时目录和索引文件路径
-                File tempDir = new File(taskInfo.getSavePath() + ".tmp" + taskInfo.getId());
-                File indexFile = new File(tempDir, "index.dat");
+                File saveDir = new File(taskInfo.getSavePath()).getParentFile();
+                String tempDirPath = saveDir.getAbsolutePath() + File.separator + ".temp-" + taskInfo.getId();
+                File tempDir = new File(tempDirPath);
+                File indexFile = new File(tempDir, "index.txt");
                 
                 // 加载已完成的范围
                 Set<DownloadRange> completedRanges = loadCompletedRanges(indexFile);
@@ -222,7 +224,8 @@ public class MultiThreadDownloader {
         for (DownloadRange completedRange : completedRanges) {
             for (DownloadRange range : allRanges) {
                 if (range.equals(completedRange)) {
-                    range.setStatus(DownloadRange.Status.DOWNLOADED);
+                    // 使用completedRange的实际状态，而不是直接设置为DOWNLOADED
+                    range.setStatus(completedRange.getStatus());
                     break;
                 }
             }
@@ -232,8 +235,15 @@ public class MultiThreadDownloader {
         saveAllRanges(indexFile, allRanges);
         
         // 更新上下文和任务信息
-        context.getCompletedRanges().addAll(completedRanges);
-        log("从索引文件加载已完成任务数: " + completedRanges.size());
+        // 只添加状态为已下载的范围到已完成集合
+        int downloadedCount = 0;
+        for (DownloadRange range : completedRanges) {
+            if (range.isDownloaded()) {
+                context.getCompletedRanges().add(range);
+                downloadedCount++;
+            }
+        }
+        log("从索引文件加载已完成任务数: " + downloadedCount);
         
         // 计算已下载的大小
         long downloadedSize = calculateDownloadedSize(savePath, completedRanges, taskInfo.getFileSize());
@@ -406,7 +416,7 @@ public class MultiThreadDownloader {
      * @param fileSize 文件大小
      * @return 所有文件区块的集合
      */
-    private Set<DownloadRange> generateAllRanges(long fileSize) {
+    public Set<DownloadRange> generateAllRanges(long fileSize) {
         Set<DownloadRange> allRanges = new HashSet<>();
         long start = 0;
         long chunkSize;
@@ -476,7 +486,7 @@ public class MultiThreadDownloader {
      * @param indexFile 索引文件
      * @param allRanges 所有文件区块
      */
-    private void saveAllRanges(File indexFile, Set<DownloadRange> allRanges) throws Exception {
+    public void saveAllRanges(File indexFile, Set<DownloadRange> allRanges) throws Exception {
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(indexFile))) {
             for (DownloadRange range : allRanges) {
                 // 格式：startByte-endByte-status
@@ -550,20 +560,15 @@ public class MultiThreadDownloader {
      * 计算已下载的文件大小
      */
     private long calculateDownloadedSize(String savePath, Set<DownloadRange> completedRanges, long fileSize) {
-        // 计算已完成范围的总大小
+        // 计算已完成范围的总大小（只统计状态为已下载的范围）
         long totalRangeSize = 0;
         for (DownloadRange range : completedRanges) {
-            totalRangeSize += range.getEndByte() - range.getStartByte() + 1;
+            if (range.isDownloaded()) {
+                totalRangeSize += range.getEndByte() - range.getStartByte() + 1;
+            }
         }
         
-        // 检查实际文件大小
-        File downloadFile = new File(savePath);
-        if (downloadFile.exists()) {
-            long actualSize = downloadFile.length();
-            // 返回较小的值，确保不会超过文件总大小
-            return Math.min(Math.min(totalRangeSize, actualSize), fileSize);
-        }
-        
+        // 确保返回值不超过文件总大小
         return Math.min(totalRangeSize, fileSize);
     }
     
@@ -587,8 +592,10 @@ public class MultiThreadDownloader {
     public long getDownloadedSizeFromIndex(DownloadTaskInfo taskInfo) {
         try {
             // 构建临时目录和索引文件路径
-            File tempDir = new File(taskInfo.getSavePath() + ".tmp" + taskInfo.getId());
-            File indexFile = new File(tempDir, "index.dat");
+            File saveDir = new File(taskInfo.getSavePath()).getParentFile();
+            String tempDirPath = saveDir.getAbsolutePath() + File.separator + ".temp-" + taskInfo.getId();
+            File tempDir = new File(tempDirPath);
+            File indexFile = new File(tempDir, "index.txt");
             
             // 加载已完成的范围
             Set<DownloadRange> completedRanges = loadCompletedRanges(indexFile);
@@ -627,15 +634,13 @@ public class MultiThreadDownloader {
      * @param taskId 任务ID
      */
     public void cleanupTaskTempFiles(String savePath, String taskId) {
-        // 临时目录位于savePath下，名称为taskId
-        File tempDir = new File(savePath, taskId);
+        // 临时目录位于保存目录下，名称为.temp-{taskId}
+        File saveDir = new File(savePath).getParentFile();
+        String tempDirPath = saveDir.getAbsolutePath() + File.separator + ".temp-" + taskId;
+        File tempDir = new File(tempDirPath);
         deleteTempDir(tempDir);
         
-        // 同时删除索引文件
-        File indexFile = new File(savePath, taskId + ".idx");
-        if (indexFile.exists()) {
-            indexFile.delete();
-        }
+        // 同时删除可能存在的其他临时文件（索引文件已在tempDir中被删除）
     }
 
     /**
@@ -645,7 +650,7 @@ public class MultiThreadDownloader {
      * @return 文件大小
      * @throws Exception 异常
      */
-    private long getFileSize(String fileUrl) throws Exception {
+    public long getFileSize(String fileUrl) throws Exception {
         URL url = new URL(fileUrl);
         HttpURLConnection conn = (HttpURLConnection) openConnectionWithProxy(url);
         conn.setRequestMethod("HEAD");
@@ -710,7 +715,7 @@ public class MultiThreadDownloader {
      * @param urlStr URL字符串
      * @return 文件名
      */
-    private String extractFileName(String urlStr) {
+    public String extractFileName(String urlStr) {
         // 首先尝试从response-content-disposition参数中提取文件名
         try {
             // 查找response-content-disposition参数
@@ -926,7 +931,7 @@ public class MultiThreadDownloader {
     /**
      * 下载范围类
      */
-    private static class DownloadRange {
+    public static class DownloadRange {
         private final long startByte;
         private final long endByte;
         private Status status;
