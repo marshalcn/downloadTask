@@ -9,15 +9,15 @@ import java.io.File;
 import java.text.DecimalFormat;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.List;
 import javax.swing.Timer;
 import com.example.download.core.MultiThreadDownloader;
 import com.example.download.manager.ConfigManager;
 import com.example.download.manager.TaskManager;
 import com.example.download.model.DownloadTaskInfo;
+import com.example.download.ui.DownloadDetailDialog;
 
 public class DownloadGUI extends JFrame {
-    private JTextField urlTextField;
-    private JButton startButton;
     private JButton createTaskButton;
     
     // 设置组件
@@ -33,16 +33,194 @@ public class DownloadGUI extends JFrame {
     private JTable taskTable;
     private DefaultTableModel taskTableModel;
     private Timer refreshTimer; // 用于刷新任务列表的定时器
+    private java.util.Set<String> selectedTaskIds; // 用于保存选中的任务ID
+    private boolean isRestoringSelection = false; // 用于指示当前是否正在恢复选中状态
 
     public DownloadGUI() {
         downloader = new MultiThreadDownloader();
         configManager = new ConfigManager();
         taskManager = new TaskManager();
+        selectedTaskIds = new java.util.HashSet<>();
         initializeUI();
         
         // 启动定时器，每秒刷新一次任务列表
         refreshTimer = new Timer(1000, e -> refreshTaskList());
         refreshTimer.start();
+    }
+    
+    /**
+     * 批量删除选中的任务
+     */
+    private void performBatchDelete() {
+        java.util.List<DownloadTaskInfo> tasksToDelete = new java.util.ArrayList<>();
+        
+        // 获取所有任务
+        java.util.List<DownloadTaskInfo> allTasks = taskManager.getAllTasks();
+        
+        // 遍历表格的每一行，检查复选框是否被选中
+        for (int i = 0; i < taskTableModel.getRowCount(); i++) {
+            Boolean isChecked = (Boolean) taskTableModel.getValueAt(i, 0);
+            if (Boolean.TRUE.equals(isChecked)) {
+                // 获取该行对应的任务ID（隐藏列）
+                String taskId = (String) taskTableModel.getValueAt(i, 8);
+                DownloadTaskInfo taskToDelete = allTasks.stream()
+                        .filter(task -> task != null && task.getId().equals(taskId))
+                        .findFirst()
+                        .orElse(null);
+                
+                if (taskToDelete != null) {
+                    tasksToDelete.add(taskToDelete);
+                }
+            }
+        }
+        
+        // 删除选中的任务
+        if (!tasksToDelete.isEmpty()) {
+            // 创建自定义对话框，包含复选框
+            JPanel panel = new JPanel(new BorderLayout());
+            panel.add(new JLabel("确定要删除选中的" + tasksToDelete.size() + "个任务吗？"), BorderLayout.NORTH);
+            
+            JCheckBox deleteLocalFileCheckBox = new JCheckBox("同时删除本地文件", true);
+            panel.add(deleteLocalFileCheckBox, BorderLayout.CENTER);
+            
+            int confirm = JOptionPane.showConfirmDialog(this, panel, "确认删除", JOptionPane.YES_NO_OPTION);
+            
+            if (confirm == JOptionPane.YES_OPTION) {
+                for (DownloadTaskInfo task : tasksToDelete) {
+                                String savePath = task.getSavePath();
+                                String taskId = task.getId();
+                                
+                                // 如果任务未完成，清理临时文件和目录
+                                if (task.getStatus() != DownloadTaskInfo.TaskStatus.COMPLETED) {
+                                    if (savePath != null && taskId != null) {
+                                        try {
+                                            downloader.cleanupTaskTempFiles(savePath, taskId);
+                                        } catch (Exception e) {
+                                            // 记录异常日志
+                                            appendLog("清理任务" + taskId + "的临时文件和目录时出现异常: " + e.getMessage());
+                                        }
+                                    } else {
+                                        // 记录日志，说明无法清理临时文件的原因
+                                        appendLog("无法清理任务" + taskId + "的临时文件：保存路径或任务ID为空");
+                                    }
+                                }
+                                
+                                // 如果复选框被选中，删除本地文件
+                                if (deleteLocalFileCheckBox.isSelected()) {
+                                    String fileName = task.getFileName();
+                                    // 检查savePath和fileName是否为null
+                                    if (savePath != null && fileName != null) {
+                                        File file = new File(savePath, fileName);
+                                        if (file.exists()) {
+                                            try {
+                                                file.delete();
+                                            } catch (Exception e) {
+                                                // 记录异常日志
+                                                appendLog("删除文件" + fileName + "时出现异常: " + e.getMessage());
+                                            }
+                                        }
+                                    } else {
+                                        // 记录日志，说明无法删除文件的原因
+                                        appendLog("无法删除任务" + task.getId() + "的本地文件：保存路径或文件名为空");
+                                    }
+                                }
+                                // 无论文件删除是否成功，都从本地任务记录删除
+                                taskManager.deleteTask(task.getId());
+                            }
+                // 刷新任务列表
+                refreshTaskList();
+            }
+        } else {
+            JOptionPane.showMessageDialog(this, "请先选择要删除的任务", "提示", JOptionPane.INFORMATION_MESSAGE);
+        }
+    }
+    
+    /**
+     * 批量开始选中的任务
+     */
+    private void performBatchStart() {
+        java.util.List<DownloadTaskInfo> tasksToStart = new java.util.ArrayList<>();
+        
+        // 获取所有任务
+        java.util.List<DownloadTaskInfo> allTasks = taskManager.getAllTasks();
+        
+        // 调试日志：输出selectedTaskIds集合的内容
+        System.out.println("performBatchStart called");
+        System.out.println("selectedTaskIds size: " + selectedTaskIds.size());
+        for (String taskId : selectedTaskIds) {
+            System.out.println("Selected taskId: " + taskId);
+        }
+        
+        // 直接使用selectedTaskIds集合来获取选中的任务
+        for (DownloadTaskInfo task : allTasks) {
+            if (task != null) {
+                System.out.println("Checking task: " + task.getId());
+                if (selectedTaskIds.contains(task.getId())) {
+                    System.out.println("Task found in selectedTaskIds: " + task.getId());
+                    if (task.getStatus() != DownloadTaskInfo.TaskStatus.COMPLETED) {
+                        System.out.println("Task is not completed, adding to tasksToStart: " + task.getId());
+                        tasksToStart.add(task);
+                    } else {
+                        System.out.println("Task is completed, skipping: " + task.getId());
+                    }
+                } else {
+                    System.out.println("Task not found in selectedTaskIds: " + task.getId());
+                }
+            }
+        }
+        
+        // 开始选中的任务
+        if (!tasksToStart.isEmpty()) {
+            System.out.println("Starting " + tasksToStart.size() + " tasks");
+            for (DownloadTaskInfo task : tasksToStart) {
+                System.out.println("Starting task: " + task.getId());
+                downloader.startDownload(task);
+            }
+        } else {
+            System.out.println("No tasks to start, showing message");
+            if (selectedTaskIds.isEmpty()) {
+                JOptionPane.showMessageDialog(this, "请先选择要开始的任务", "提示", JOptionPane.INFORMATION_MESSAGE);
+            } else {
+                JOptionPane.showMessageDialog(this, "所选任务已处于运行或完成状态，请选择等待或暂停状态的任务", "提示", JOptionPane.INFORMATION_MESSAGE);
+            }
+        }
+    }
+    
+    /**
+     * 批量暂停选中的任务
+     */
+    private void performBatchPause() {
+        System.out.println("performBatchPause called");
+        System.out.println("selectedTaskIds size: " + selectedTaskIds.size());
+        
+        boolean hasTasksToPause = false;
+        List<DownloadTaskInfo> allTasks = taskManager.getAllTasks();
+        
+        for (DownloadTaskInfo task : allTasks) {
+            System.out.println("Checking task: " + task.getId());
+            if (selectedTaskIds.contains(task.getId())) {
+                System.out.println("Task found in selectedTaskIds: " + task.getId());
+                if (task.getStatus() == DownloadTaskInfo.TaskStatus.DOWNLOADING) {
+                    // 只暂停正在下载的任务
+                    downloader.pauseDownload(task);
+                    hasTasksToPause = true;
+                    System.out.println("Task paused: " + task.getId());
+                } else {
+                    System.out.println("Task is " + task.getStatus() + ", skipping: " + task.getId());
+                }
+            } else {
+                System.out.println("Task not found in selectedTaskIds: " + task.getId());
+            }
+        }
+        
+        if (!hasTasksToPause) {
+            System.out.println("No tasks to pause, showing message");
+            if (selectedTaskIds.isEmpty()) {
+                JOptionPane.showMessageDialog(this, "请先选择要暂停的任务", "提示", JOptionPane.INFORMATION_MESSAGE);
+            } else {
+                JOptionPane.showMessageDialog(this, "所选任务已处于非下载状态，请选择正在下载的任务", "提示", JOptionPane.INFORMATION_MESSAGE);
+            }
+        }
     }
 
     private void initializeUI() {
@@ -84,14 +262,69 @@ public class DownloadGUI extends JFrame {
 
         
         // 创建任务表格
-        String[] columnNames = {"文件名", "状态", "进度", "速度", "剩余时间", "添加时间", "完成时间"};
+        String[] columnNames = {"选择", "文件名", "状态", "进度", "速度", "剩余时间", "添加时间", "完成时间", "任务ID"}; // 最后一列用于保存任务ID，隐藏显示
         taskTableModel = new DefaultTableModel(columnNames, 0) {
             @Override
             public boolean isCellEditable(int row, int column) {
-                return false;
+                // 只有复选框列（第0列）可编辑
+                return column == 0;
+            }
+            
+            @Override
+            public Class<?> getColumnClass(int columnIndex) {
+                // 第0列是布尔类型（复选框）
+                if (columnIndex == 0) {
+                    return Boolean.class;
+                }
+                return super.getColumnClass(columnIndex);
             }
         };
         taskTable = new JTable(taskTableModel);
+        
+        // 添加表格模型监听器，用于实时保存复选框状态变化
+        taskTableModel.addTableModelListener(e -> {
+            // System.out.println("TableModelListener triggered");
+            // System.out.println("isRestoringSelection: " + isRestoringSelection);
+            // System.out.println("Column: " + e.getColumn());
+            // System.out.println("Row: " + e.getFirstRow());
+            
+            // 如果正在恢复选中状态，就不修改selectedTaskIds集合
+            if (isRestoringSelection) {
+                // System.out.println("Skipping because isRestoringSelection is true");
+                return;
+            }
+            
+            if (e.getColumn() == 0) { // 只监听复选框列（第0列）的变化
+                // System.out.println("Processing checkbox column change");
+                int row = e.getFirstRow();
+                // 确保行索引是有效的（防止清空表格时触发）
+                if (row >= 0 && row < taskTableModel.getRowCount()) {
+                    // System.out.println("Row index is valid: " + row);
+                    Boolean isSelected = (Boolean) taskTableModel.getValueAt(row, 0);
+                    // System.out.println("isSelected: " + isSelected);
+                    if (isSelected != null) {
+                        // 直接从表格中获取任务ID
+                        String taskId = (String) taskTableModel.getValueAt(row, 8);
+                        // System.out.println("TaskId from table: " + taskId);
+                        if (taskId != null) {
+                            if (isSelected) {
+                                selectedTaskIds.add(taskId);
+                                // System.out.println("Added taskId to selectedTaskIds: " + taskId);
+                                // System.out.println("selectedTaskIds size: " + selectedTaskIds.size());
+                            } else {
+                                selectedTaskIds.remove(taskId);
+                                // System.out.println("Removed taskId from selectedTaskIds: " + taskId);
+                                // System.out.println("selectedTaskIds size: " + selectedTaskIds.size());
+                            }
+                        }
+                    }
+                } else {
+                    // System.out.println("Row index is invalid: " + row + ", table row count: " + taskTableModel.getRowCount());
+                }
+            } else {
+                // System.out.println("Not processing because column is not 0");
+            }
+        });
         
         // 添加任务点击监听器
         taskTable.addMouseListener(new MouseAdapter() {
@@ -101,9 +334,9 @@ public class DownloadGUI extends JFrame {
                     int selectedRow = taskTable.getSelectedRow();
                     if (selectedRow >= 0) {
                         // 获取选中的任务
-                        String fileName = (String) taskTableModel.getValueAt(selectedRow, 0);
+                        String taskId = (String) taskTableModel.getValueAt(selectedRow, 8);
                         DownloadTaskInfo selectedTask = taskManager.getAllTasks().stream()
-                                .filter(task -> task.getFileName().equals(fileName))
+                                .filter(task -> task.getId().equals(taskId))
                                 .findFirst()
                                 .orElse(null);
                         
@@ -118,18 +351,38 @@ public class DownloadGUI extends JFrame {
         });
         
         // 设置表格列宽
-        taskTable.getColumnModel().getColumn(0).setPreferredWidth(150); // 文件名
-        taskTable.getColumnModel().getColumn(1).setPreferredWidth(80);  // 状态
-        taskTable.getColumnModel().getColumn(2).setPreferredWidth(60);  // 进度
-        taskTable.getColumnModel().getColumn(3).setPreferredWidth(80);  // 速度
-        taskTable.getColumnModel().getColumn(4).setPreferredWidth(80);  // 剩余时间
-        taskTable.getColumnModel().getColumn(5).setPreferredWidth(120); // 添加时间
-        taskTable.getColumnModel().getColumn(6).setPreferredWidth(120); // 完成时间
+        taskTable.getColumnModel().getColumn(0).setPreferredWidth(50); // 选择列
+        taskTable.getColumnModel().getColumn(1).setPreferredWidth(100); // 文件名
+        taskTable.getColumnModel().getColumn(2).setPreferredWidth(80); // 状态
+        taskTable.getColumnModel().getColumn(3).setPreferredWidth(60); // 进度
+        taskTable.getColumnModel().getColumn(4).setPreferredWidth(80); // 速度
+        taskTable.getColumnModel().getColumn(5).setPreferredWidth(100); // 剩余时间
+        taskTable.getColumnModel().getColumn(6).setPreferredWidth(120); // 添加时间
+        taskTable.getColumnModel().getColumn(7).setPreferredWidth(120); // 完成时间
+        taskTable.getColumnModel().getColumn(8).setMinWidth(0); // 任务ID列
+        taskTable.getColumnModel().getColumn(8).setMaxWidth(0); // 隐藏任务ID列
+        taskTable.getColumnModel().getColumn(8).setWidth(0);
         
         // 设置表格自动调整
         taskTable.setAutoResizeMode(JTable.AUTO_RESIZE_OFF);
         JScrollPane taskScrollPane = new JScrollPane(taskTable);
         taskPanel.add(taskScrollPane, BorderLayout.CENTER);
+        
+        // 添加批量操作按钮面板
+        JPanel batchOperationPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        JButton batchDeleteButton = new JButton("批量删除");
+        JButton batchStartButton = new JButton("批量开始");
+        JButton batchPauseButton = new JButton("批量暂停");
+        
+        batchDeleteButton.addActionListener(e -> performBatchDelete());
+        batchStartButton.addActionListener(e -> performBatchStart());
+        batchPauseButton.addActionListener(e -> performBatchPause());
+        
+        batchOperationPanel.add(batchDeleteButton);
+        batchOperationPanel.add(batchStartButton);
+        batchOperationPanel.add(batchPauseButton);
+        
+        taskPanel.add(batchOperationPanel, BorderLayout.SOUTH);
         taskPanel.setMinimumSize(new Dimension(0, 150));
         taskPanel.setPreferredSize(new Dimension(0, 150));
         
@@ -268,12 +521,10 @@ public class DownloadGUI extends JFrame {
         dialogStartButton.addActionListener(e -> {
             String url = dialogUrlTextField.getText().trim();
             if (!url.isEmpty()) {
-                // 设置主界面的URL文本框
-                urlTextField.setText(url);
                 // 关闭对话框
                 createTaskDialog.dispose();
                 // 执行下载
-                startDownload();
+                startDownload(url);
             } else {
                 JOptionPane.showMessageDialog(createTaskDialog, "请输入下载URL", "错误", JOptionPane.ERROR_MESSAGE);
             }
@@ -326,8 +577,7 @@ public class DownloadGUI extends JFrame {
         threadCountSpinner.setValue(configManager.getDefaultThreadCount());
     }
 
-    private void startDownload() {
-        String url = urlTextField.getText().trim();
+    private void startDownload(String url) {
         String savePath = configManager.getDefaultDownloadPath();
         int threadCount = configManager.getDefaultThreadCount();
 
@@ -353,14 +603,14 @@ public class DownloadGUI extends JFrame {
         // 启动下载线程
         new Thread(() -> {
             try {
-                // 执行下载
-                downloader.download(taskInfo, null);
+                // 执行下载，使用配置的分块大小
+                downloader.startDownload(taskInfo);
                 
                 // 更新任务信息
                 taskManager.updateTask(taskInfo);
-
-                // 下载完成
-                JOptionPane.showMessageDialog(DownloadGUI.this, "文件下载完成！", "提示", JOptionPane.INFORMATION_MESSAGE);
+                
+                // 显示开始下载的提示
+                JOptionPane.showMessageDialog(DownloadGUI.this, "开始下载文件！", "提示", JOptionPane.INFORMATION_MESSAGE);
             } catch (Exception e) {
                 // 更新任务状态为失败
                 taskInfo.setStatus(DownloadTaskInfo.TaskStatus.FAILED);
@@ -452,20 +702,65 @@ public class DownloadGUI extends JFrame {
         SwingUtilities.invokeLater(() -> {
             taskTableModel.setRowCount(0); // 清空表格
             
-            for (DownloadTaskInfo task : sortedTasks) {
-                String[] rowData = new String[7];
-                rowData[0] = task.getFileName();
-                rowData[1] = task.getStatus().toString();
-                rowData[2] = task.getProgress() + "%";
-                rowData[3] = formatSpeed(task.getDownloadSpeed());
-                rowData[4] = formatRemainingTime(task.getEstimatedTimeRemaining());
-                rowData[5] = formatDateTime(task.getAddTime());
-                rowData[6] = formatDateTime(task.getCompletedTime());
-                
-                taskTableModel.addRow(rowData);
+            // 设置恢复选中状态标志
+            isRestoringSelection = true;
+            
+            try {
+                for (DownloadTaskInfo task : sortedTasks) {
+                    // 对于已暂停的任务，从索引文件中获取最新的下载大小
+                    if (task.getStatus() == DownloadTaskInfo.TaskStatus.PAUSED) {
+                        long downloadedSize = downloader.getDownloadedSizeFromIndex(task);
+                        if (downloadedSize != task.getDownloadedSize()) {
+                            task.setDownloadedSize(downloadedSize);
+                        }
+                    }
+                    
+                    Object[] rowData = new Object[9];
+                    // 恢复选中状态
+                    rowData[0] = selectedTaskIds.contains(task.getId());
+                    rowData[1] = task.getFileName();
+                    // 将英文状态转换为中文显示
+                    String statusStr;
+                    switch (task.getStatus()) {
+                        case WAITING:
+                            statusStr = "等待中";
+                            break;
+                        case DOWNLOADING:
+                            statusStr = "下载中";
+                            break;
+                        case COMPLETED:
+                            statusStr = "已完成";
+                            break;
+                        case PAUSED:
+                            statusStr = "已暂停";
+                            break;
+                        case CANCELED:
+                            statusStr = "已取消";
+                            break;
+                        case FAILED:
+                            statusStr = "失败";
+                            break;
+                        default:
+                            statusStr = task.getStatus().toString();
+                    }
+                    rowData[2] = statusStr;
+                    rowData[3] = task.getProgress() + "%";
+                    rowData[4] = formatSpeed(task.getDownloadSpeed());
+                    rowData[5] = formatRemainingTime(task.getEstimatedTimeRemaining());
+                    rowData[6] = formatDateTime(task.getAddTime());
+                    rowData[7] = formatDateTime(task.getCompletedTime());
+                    rowData[8] = task.getId(); // 保存任务ID到隐藏列
+                    
+                    taskTableModel.addRow(rowData);
+                }
+            } finally {
+                // 无论如何都要重置恢复选中状态标志
+                isRestoringSelection = false;
             }
         });
     }
+    
+
 
     // 创建进度监听器接口 (已简化)
     public interface ProgressListener {

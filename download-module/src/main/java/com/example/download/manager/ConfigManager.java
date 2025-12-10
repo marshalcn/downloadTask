@@ -10,6 +10,7 @@ public class ConfigManager {
     private static final String CONFIG_FILE_NAME = "download_config.properties";
     private static final String DEFAULT_DOWNLOAD_PATH_KEY = "default_download_path";
     private static final String DEFAULT_THREAD_COUNT_KEY = "default_thread_count";
+    private static final String DEFAULT_CHUNK_SIZE_KEY = "default_chunk_size";
     
     private Properties properties;
     private File configFile;
@@ -31,6 +32,7 @@ public class ConfigManager {
             // 如果配置文件不存在，则使用默认值
             setDefaultDownloadPath(System.getProperty("user.home"));
             setDefaultThreadCount(4);
+            setDefaultChunkSize(1024 * 1024); // 默认1MB
             saveConfig();
         }
     }
@@ -46,6 +48,7 @@ public class ConfigManager {
             // 加载失败时使用默认值
             setDefaultDownloadPath(System.getProperty("user.home"));
             setDefaultThreadCount(4);
+            setDefaultChunkSize(1024 * 1024); // 默认1MB
         }
     }
     
@@ -102,6 +105,32 @@ public class ConfigManager {
      */
     public void setDefaultThreadCount(int threadCount) {
         properties.setProperty(DEFAULT_THREAD_COUNT_KEY, String.valueOf(threadCount));
+        saveConfig();
+    }
+    
+    /**
+     * 获取默认分块大小（字节）
+     * 
+     * @return 默认分块大小
+     */
+    public int getDefaultChunkSize() {
+        String chunkSizeStr = properties.getProperty(DEFAULT_CHUNK_SIZE_KEY, String.valueOf(1024 * 1024));
+        try {
+            return Integer.parseInt(chunkSizeStr);
+        } catch (NumberFormatException e) {
+            // 解析失败时使用默认值1MB
+            setDefaultChunkSize(1024 * 1024);
+            return 1024 * 1024;
+        }
+    }
+    
+    /**
+     * 设置默认分块大小（字节）
+     * 
+     * @param chunkSize 默认分块大小
+     */
+    public void setDefaultChunkSize(int chunkSize) {
+        properties.setProperty(DEFAULT_CHUNK_SIZE_KEY, String.valueOf(chunkSize));
         saveConfig();
     }
     

@@ -137,7 +137,15 @@ public class TaskManager {
         }
         
         try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream(TASKS_FILE))) {
-            allTasks = (List<DownloadTaskInfo>) ois.readObject();
+            List<DownloadTaskInfo> loadedTasks = (List<DownloadTaskInfo>) ois.readObject();
+            // 确保列表不为null且不包含null元素
+            if (loadedTasks != null) {
+                allTasks = loadedTasks.stream()
+                        .filter(task -> task != null)
+                        .collect(Collectors.toList());
+            } else {
+                allTasks = new ArrayList<>();
+            }
         } catch (IOException | ClassNotFoundException e) {
             System.err.println("加载任务列表失败: " + e.getMessage());
             allTasks = new ArrayList<>();

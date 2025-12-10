@@ -12,6 +12,7 @@ public class DownloadTaskInfo implements Serializable {
     public enum TaskStatus {
         WAITING,    // 等待中
         DOWNLOADING, // 下载中
+        PAUSED,     // 已暂停
         COMPLETED,  // 已完成
         CANCELED,   // 已取消
         FAILED      // 失败

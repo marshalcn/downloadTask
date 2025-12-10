@@ -13,6 +13,7 @@ import java.io.File;
 public class SettingsDialog extends JDialog {
     private JTextField savePathTextField;
     private JSpinner threadCountSpinner;
+    private JSpinner chunkSizeSpinner;
     private JButton browseButton;
     private JButton saveButton;
     private JButton cancelButton;
@@ -86,6 +87,24 @@ public class SettingsDialog extends JDialog {
         gbc.gridwidth = 2;
         mainPanel.add(threadCountSpinner, gbc);
 
+        // 分块大小标签
+        gbc.gridx = 0;
+        gbc.gridy = 2;
+        gbc.weightx = 0;
+        gbc.gridwidth = 1;
+        mainPanel.add(new JLabel("文件分块大小 (KB):"), gbc);
+
+        // 分块大小微调器（转换为KB显示）
+        int defaultChunkSizeKB = configManager.getDefaultChunkSize() / 1024;
+        SpinnerNumberModel chunkSizeModel = new SpinnerNumberModel(
+                defaultChunkSizeKB, 128, 10240, 128); // 128KB到10MB，步长128KB
+        chunkSizeSpinner = new JSpinner(chunkSizeModel);
+        gbc.gridx = 1;
+        gbc.gridy = 2;
+        gbc.weightx = 1;
+        gbc.gridwidth = 2;
+        mainPanel.add(chunkSizeSpinner, gbc);
+
         // 按钮面板
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
         
@@ -134,6 +153,11 @@ public class SettingsDialog extends JDialog {
             // 保存默认下载线程数
             int threadCount = (int) threadCountSpinner.getValue();
             configManager.setDefaultThreadCount(threadCount);
+
+            // 保存默认分块大小（转换为字节保存）
+            int chunkSizeKB = (int) chunkSizeSpinner.getValue();
+            int chunkSizeBytes = chunkSizeKB * 1024;
+            configManager.setDefaultChunkSize(chunkSizeBytes);
 
             JOptionPane.showMessageDialog(this, "设置已保存", "提示", JOptionPane.INFORMATION_MESSAGE);
             dispose();

@@ -23,6 +23,12 @@ public class DownloadDetailDialog extends JDialog {
     private Timer refreshTimer;
     private DecimalFormat df = new DecimalFormat("0.00");
     private SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+    // 下载进度信息显示文本框
+    private JTextField downloadedSizeField;
+    private JTextField speedField;
+    private JTextField remainingTimeField;
+    // 保存平均下载速度，用于下载完成后显示
+    private double averageDownloadSpeed = 0.0;
 
     public DownloadDetailDialog(JFrame parent, DownloadTaskInfo taskInfo) {
         super(parent, "下载详情 - " + taskInfo.getFileName(), true);
@@ -41,7 +47,7 @@ public class DownloadDetailDialog extends JDialog {
     }
 
     private void initializeUI() {
-        setSize(800, 600);
+        setSize(800, 700); // 增加窗口高度，确保所有内容都能显示
         setLocationRelativeTo(getParent());
         
         // 创建主面板
@@ -58,6 +64,7 @@ public class DownloadDetailDialog extends JDialog {
         // 任务基本信息
         JPanel infoPanel = new JPanel(new GridLayout(4, 2, 10, 5));
         infoPanel.setBorder(new EmptyBorder(0, 0, 10, 0));
+        infoPanel.setPreferredSize(new Dimension(0, 150)); // 设置合适的高度，确保所有信息项都能显示
         
         infoPanel.add(new JLabel("文件名:"));
         infoPanel.add(new JLabel(taskInfo.getFileName()));
@@ -87,20 +94,35 @@ public class DownloadDetailDialog extends JDialog {
         totalProgressBar.setString("0% - 等待下载");
         totalProgressPanel.add(totalProgressBar, BorderLayout.CENTER);
         
-        JPanel progressInfoPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        JTextField downloadedSizeField = new JTextField(15);
-        downloadedSizeField.setEditable(false);
-        JTextField speedField = new JTextField(15);
-        speedField.setEditable(false);
-        JTextField remainingTimeField = new JTextField(15);
-        remainingTimeField.setEditable(false);
+        // 使用GridLayout实现三个信息区域的平均分布
+        JPanel progressInfoPanel = new JPanel(new GridLayout(1, 3, 10, 0));
+        progressInfoPanel.setBorder(new EmptyBorder(5, 0, 0, 0));
         
-        progressInfoPanel.add(new JLabel("已下载:"));
-        progressInfoPanel.add(downloadedSizeField);
-        progressInfoPanel.add(new JLabel("速度:"));
-        progressInfoPanel.add(speedField);
-        progressInfoPanel.add(new JLabel("剩余时间:"));
-        progressInfoPanel.add(remainingTimeField);
+        // 已下载信息区域
+        JPanel downloadedPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        downloadedSizeField = new JTextField(25); // 再次增加文本框长度
+        downloadedSizeField.setEditable(false);
+        downloadedPanel.add(new JLabel("已下载:"));
+        downloadedPanel.add(downloadedSizeField);
+        
+        // 速度信息区域
+        JPanel speedPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        speedField = new JTextField(15);
+        speedField.setEditable(false);
+        speedPanel.add(new JLabel("速度:"));
+        speedPanel.add(speedField);
+        
+        // 剩余时间信息区域
+        JPanel remainingTimePanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        remainingTimeField = new JTextField(15);
+        remainingTimeField.setEditable(false);
+        remainingTimePanel.add(new JLabel("剩余时间:"));
+        remainingTimePanel.add(remainingTimeField);
+        
+        // 将三个信息区域添加到主进度信息面板
+        progressInfoPanel.add(downloadedPanel);
+        progressInfoPanel.add(speedPanel);
+        progressInfoPanel.add(remainingTimePanel);
         
         totalProgressPanel.add(progressInfoPanel, BorderLayout.SOUTH);
         
@@ -119,9 +141,17 @@ public class DownloadDetailDialog extends JDialog {
         };
         
         chunkProgressTable = new JTable(chunkProgressModel);
-        chunkProgressTable.setAutoResizeMode(JTable.AUTO_RESIZE_OFF);
+        // 设置自动调整列宽模式，让表格内容铺满整个宽度
+        chunkProgressTable.setAutoResizeMode(JTable.AUTO_RESIZE_ALL_COLUMNS);
         
-        // 设置列宽
+        // 设置网格线可见
+        chunkProgressTable.setShowGrid(true);
+        chunkProgressTable.setGridColor(Color.GRAY);
+        
+        // 确保表头与表体之间有分隔线
+        chunkProgressTable.getTableHeader().setBorder(BorderFactory.createEtchedBorder());
+        
+        // 设置列宽，表格会根据需要自动调整
         chunkProgressTable.getColumnModel().getColumn(0).setPreferredWidth(60);
         chunkProgressTable.getColumnModel().getColumn(1).setPreferredWidth(100);
         chunkProgressTable.getColumnModel().getColumn(2).setPreferredWidth(100);
@@ -132,6 +162,8 @@ public class DownloadDetailDialog extends JDialog {
         JScrollPane chunkProgressScrollPane = new JScrollPane(chunkProgressTable);
         chunkProgressPanel.add(chunkProgressScrollPane, BorderLayout.CENTER);
         
+        // 为分块进度面板设置合适的高度，避免占用过多空间
+        chunkProgressPanel.setPreferredSize(new Dimension(0, 300));
         progressTabPanel.add(chunkProgressPanel, BorderLayout.SOUTH);
         
         // 下载日志标签页
@@ -171,7 +203,76 @@ public class DownloadDetailDialog extends JDialog {
             // 更新总进度
             int progress = taskInfo.getProgress();
             totalProgressBar.setValue(progress);
-            totalProgressBar.setString(progress + "% - " + taskInfo.getStatus().toString());
+            // 将英文状态转换为中文显示
+            String statusStr;
+            switch (taskInfo.getStatus()) {
+                case WAITING:
+                    statusStr = "暂停";
+                    break;
+                case DOWNLOADING:
+                    statusStr = "下载中";
+                    break;
+                case COMPLETED:
+                    statusStr = "已完成";
+                    break;
+                case CANCELED:
+                    statusStr = "已取消";
+                    break;
+                case FAILED:
+                    statusStr = "失败";
+                    break;
+                default:
+                    statusStr = taskInfo.getStatus().toString();
+            }
+            totalProgressBar.setString(progress + "% - " + statusStr);
+            
+            // 更新已下载大小
+            String downloadedSizeStr = formatFileSize(taskInfo.getDownloadedSize()) + "/ " + formatFileSize(taskInfo.getFileSize());
+            downloadedSizeField.setText(downloadedSizeStr);
+            
+            // 更新下载速度
+            double currentSpeed = taskInfo.getDownloadSpeed();
+            String speedStr;
+            
+            // 如果是下载中状态，实时更新速度
+            if (taskInfo.getStatus() == DownloadTaskInfo.TaskStatus.DOWNLOADING) {
+                if (currentSpeed > 0) {
+                    averageDownloadSpeed = (averageDownloadSpeed * 0.9) + (currentSpeed * 0.1); // 平滑计算平均速度
+                    speedStr = df.format(currentSpeed) + " KB/s";
+                } else {
+                    speedStr = "0.00 KB/s";
+                }
+            } 
+            // 如果是已完成状态，显示平均下载速度
+            else if (taskInfo.getStatus() == DownloadTaskInfo.TaskStatus.COMPLETED) {
+                speedStr = df.format(averageDownloadSpeed) + " KB/s";
+            } 
+            // 其他状态显示0
+            else {
+                speedStr = "0.00 KB/s";
+            }
+            
+            speedField.setText(speedStr);
+            
+            // 更新剩余时间
+            String remainingTimeStr;
+            long remainingTime = taskInfo.getEstimatedTimeRemaining();
+            
+            if (taskInfo.getStatus() == DownloadTaskInfo.TaskStatus.DOWNLOADING) {
+                if (remainingTime > 0) {
+                    remainingTimeStr = formatTime(remainingTime);
+                } else if (remainingTime == 0) {
+                    remainingTimeStr = "00:00:00";
+                } else {
+                    remainingTimeStr = "--:--:--";
+                }
+            } 
+            // 下载完成或其他状态显示00:00:00
+            else {
+                remainingTimeStr = "00:00:00";
+            }
+            
+            remainingTimeField.setText(remainingTimeStr);
             
             // 更新分块进度表格
             updateChunkProgressTable();
@@ -224,13 +325,13 @@ public class DownloadDetailDialog extends JDialog {
      */
     private String formatFileSize(long size) {
         if (size < 1024) {
-            return size + " B";
+            return size + "B";
         } else if (size < 1024 * 1024) {
-            return df.format(size / 1024.0) + " KB";
+            return df.format(size / 1024.0) + "KB";
         } else if (size < 1024 * 1024 * 1024) {
-            return df.format(size / (1024.0 * 1024.0)) + " MB";
+            return df.format(size / (1024.0 * 1024.0)) + "MB";
         } else {
-            return df.format(size / (1024.0 * 1024.0 * 1024.0)) + " GB";
+            return df.format(size / (1024.0 * 1024.0 * 1024.0)) + "GB";
         }
     }
     
@@ -244,5 +345,17 @@ public class DownloadDetailDialog extends JDialog {
             return "-";
         }
         return sdf.format(date);
+    }
+    
+    /**
+     * 将秒数格式化为HH:mm:ss格式
+     * @param seconds 秒数
+     * @return 格式化后的时间字符串
+     */
+    private String formatTime(long seconds) {
+        long hours = seconds / 3600;
+        long minutes = (seconds % 3600) / 60;
+        long secs = seconds % 60;
+        return String.format("%02d:%02d:%02d", hours, minutes, secs);
     }
 }
